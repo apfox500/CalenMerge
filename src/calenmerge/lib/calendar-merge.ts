@@ -16,7 +16,7 @@ type CalendarEntry = {
  * @param calendars a list of calendar objects to merge
  */
 export async function fetch_merge(exclude : string[], calendars : Record<string, CalendarEntry[]>) : Promise<string>{
-    let acc : CalendarResponse[] = []; // accumulator for all parsed and sanitized calendars
+  const acc : CalendarResponse[] = []; // accumulator for all parsed and sanitized calendars
 
     for (const [name, cals] of Object.entries(calendars)) {
         if(!exclude.includes(name)){
@@ -75,7 +75,6 @@ function sanitize_cal(name: string, cal: CalendarResponse, visibility: string): 
         newEvent.summary = `${name}: ${event.summary}`;
     }else{
         newEvent.summary = `${name}`;
-
     }
 
     if (visibility === "loconly") {
@@ -106,47 +105,43 @@ function toText(value: unknown): string | undefined {
   return undefined;
 }
 
-  function toRepeatingExdates(exdate: unknown): Date[] {
-    if (!exdate || typeof exdate !== "object") {
-      return [];
-    }
+type ParsedEvent = {
+  type?: "VEVENT";
+  start?: Date & { dateOnly?: boolean };
+  end?: Date;
+  summary?: unknown;
+  description?: unknown;
+  location?: unknown;
+  uid?: unknown;
+  recurrenceid?: Date;
+  datetype?: string;
+  rrule?: { toString(): string } | null;
+};
 
-    return Object.values(exdate as Record<string, unknown>).filter((value): value is Date => value instanceof Date);
-  }
-
-  function toEventData(event: any): ICalEventData | null {
+  function toEventData(event: ParsedEvent | null | undefined): ICalEventData | null {
     if (!event || event.type !== "VEVENT") {
       return null;
     }
 
-    const typedEvent = event as {
-      start?: Date;
-      end?: Date;
-      summary?: unknown;
-      description?: unknown;
-      location?: unknown;
-      uid?: unknown;
-      recurrenceid?: Date;
-      exdate?: unknown;
-      rrule?: { toString(): string } | null;
-    };
-
-    const repeating = typedEvent.rrule
-      ? (typedEvent.rrule.toString() as ICalEventData["repeating"])
+    const repeating = event.rrule
+      ? (event.rrule.toString() as ICalEventData["repeating"])
       : undefined;
+    const allDay =
+      event.datetype === "date" || event.start?.dateOnly === true;
 
-    if (!typedEvent.start) {
+    if (!event.start) {
       return null;
     }
 
     return {
-      start: typedEvent.start,
-      end: typedEvent.end,
-      summary: toText(typedEvent.summary),
-      description: toText(typedEvent.description),
-      location: toText(typedEvent.location),
-      id: typeof typedEvent.uid === "string" ? typedEvent.uid : undefined,
-      recurrenceId: typedEvent.recurrenceid,
+      start: event.start,
+      end: event.end,
+      summary: toText(event.summary),
+      description: toText(event.description),
+      location: toText(event.location),
+      id: typeof event.uid === "string" ? event.uid : undefined,
+      recurrenceId: event.recurrenceid,
+      allDay,
       repeating,
     };
   }
