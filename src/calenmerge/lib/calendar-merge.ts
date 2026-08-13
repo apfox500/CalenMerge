@@ -69,6 +69,10 @@ function sanitize_cal(name: string, cal: CalendarResponse, visibility: string): 
       continue;
     }
 
+    if (event.transparency === "TRANSPARENT") {
+      continue;
+    }
+
     const newEvent = { ...event };
 
     if (visibility === "public") {
