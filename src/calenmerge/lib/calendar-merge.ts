@@ -106,6 +106,51 @@ function toText(value: unknown): string | undefined {
   return undefined;
 }
 
+  function toRepeatingExdates(exdate: unknown): Date[] {
+    if (!exdate || typeof exdate !== "object") {
+      return [];
+    }
+
+    return Object.values(exdate as Record<string, unknown>).filter((value): value is Date => value instanceof Date);
+  }
+
+  function toEventData(event: any): ICalEventData | null {
+    if (!event || event.type !== "VEVENT") {
+      return null;
+    }
+
+    const typedEvent = event as {
+      start?: Date;
+      end?: Date;
+      summary?: unknown;
+      description?: unknown;
+      location?: unknown;
+      uid?: unknown;
+      recurrenceid?: Date;
+      exdate?: unknown;
+      rrule?: { toString(): string } | null;
+    };
+
+    const repeating = typedEvent.rrule
+      ? (typedEvent.rrule.toString() as ICalEventData["repeating"])
+      : undefined;
+
+    if (!typedEvent.start) {
+      return null;
+    }
+
+    return {
+      start: typedEvent.start,
+      end: typedEvent.end,
+      summary: toText(typedEvent.summary),
+      description: toText(typedEvent.description),
+      location: toText(typedEvent.location),
+      id: typeof typedEvent.uid === "string" ? typedEvent.uid : undefined,
+      recurrenceId: typedEvent.recurrenceid,
+      repeating,
+    };
+  }
+
 /**
  * Given multiple calendar objects, it will merge them into one calendar object
  * @param calendars a list of calendar objects to merge
@@ -120,17 +165,19 @@ function merge_calendars(calendars : CalendarResponse[]) : ICalCalendar{
                 continue;
             }
 
-            // convert  CalendarComponent to ICalEvent | ICalEventData from ical
+      const eventData = toEventData(event);
+      if (eventData) {
+        merged_cal.createEvent(eventData);
+      }
 
-            const eventData: ICalEventData = {
-            start: event.start,
-            end: event.end,
-            summary: toText(event.summary),
-            description: toText(event.description),
-            location: toText(event.location),
-            id: typeof event.uid === "string" ? event.uid : undefined,
-};
-            merged_cal.createEvent(eventData);
+      if (event.recurrences) {
+        for (const recurrence of Object.values(event.recurrences)) {
+          const recurrenceData = toEventData(recurrence);
+          if (recurrenceData) {
+            merged_cal.createEvent(recurrenceData);
+          }
+        }
+      }
         }
     }
 
