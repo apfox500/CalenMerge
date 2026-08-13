@@ -1,4 +1,4 @@
-import {CalendarResponse, parseICS} from "node-ical";
+import {CalendarResponse, EventInstance, expandRecurringEvent, parseICS, VEvent} from "node-ical";
 import ical, { ICalCalendar, ICalEventData } from 'ical-generator';
 /**
  * The type of each calendar entry from the env file
@@ -9,6 +9,10 @@ type CalendarEntry = {
     ical_link: string;
 };
 
+const LOOKBACK_DAYS = 7;
+const LOOKAHEAD_DAYS = 90;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
 
 /**
  * Top level function to run whole calendar merging script
@@ -16,14 +20,15 @@ type CalendarEntry = {
  * @param calendars a list of calendar objects to merge
  */
 export async function fetch_merge(exclude : string[], calendars : Record<string, CalendarEntry[]>) : Promise<string>{
-  const acc : CalendarResponse[] = []; // accumulator for all parsed and sanitized calendars
+  const acc : ICalEventData[] = []; // accumulator for all sanitized event instances
+  const { start: windowStart, end: windowEnd } = getEventWindow();
 
     for (const [name, cals] of Object.entries(calendars)) {
         if(!exclude.includes(name)){
             for (const cal of cals) {
                     const parsedCal = await fetch_cal(cal.ical_link);
-                    const sanitizedCal = sanitize_cal(cal.name, parsedCal, cal.visibility);
-                    acc.push(sanitizedCal);
+                    const sanitizedEvents = sanitize_cal(cal.name, parsedCal, cal.visibility, windowStart, windowEnd);
+                    acc.push(...sanitizedEvents);
             }
         }
     }
@@ -59,8 +64,14 @@ async function fetch_cal(link : string) : Promise<CalendarResponse>{
  * @param cal calendar object to sanitize
  * @param visibilty the privacy setting of the calendar, either 'public', 'loconly', or 'private'
  */
-function sanitize_cal(name: string, cal: CalendarResponse, visibility: string): CalendarResponse {
-  const sanitized_cal: CalendarResponse = {};
+function sanitize_cal(
+  name: string,
+  cal: CalendarResponse,
+  visibility: string,
+  windowStart: Date,
+  windowEnd: Date,
+): ICalEventData[] {
+  const sanitizedEvents: ICalEventData[] = [];
 
   for (const key of Object.keys(cal)) {
     const event = cal[key];
@@ -73,31 +84,18 @@ function sanitize_cal(name: string, cal: CalendarResponse, visibility: string): 
       continue;
     }
 
-    const newEvent = { ...event };
+    const instances = expandRecurringEvent(event as VEvent, {
+      from: windowStart,
+      to: windowEnd,
+      expandOngoing: true,
+    });
 
-    if (visibility === "public") {
-        newEvent.summary = `${name}: ${event.summary}`;
-    }else{
-        newEvent.summary = `${name}`;
+    for (const instance of instances) {
+      sanitizedEvents.push(createSanitizedEvent(name, instance, visibility));
     }
-
-    if (visibility === "loconly") {
-      delete newEvent.description;
-      delete newEvent.attendees;
-      delete newEvent.organizer;
-    }
-
-    if (visibility === "private") {
-      delete newEvent.description;
-      delete newEvent.location;
-      delete newEvent.attendees;
-      delete newEvent.organizer;
-    }
-
-    sanitized_cal[key] = newEvent;
   }
 
-  return sanitized_cal;
+  return sanitizedEvents;
 }
 
 function toText(value: unknown): string | undefined {
@@ -109,75 +107,40 @@ function toText(value: unknown): string | undefined {
   return undefined;
 }
 
-type ParsedEvent = {
-  type?: "VEVENT";
-  start?: Date & { dateOnly?: boolean };
-  end?: Date;
-  summary?: unknown;
-  description?: unknown;
-  location?: unknown;
-  uid?: unknown;
-  recurrenceid?: Date;
-  datetype?: string;
-  rrule?: { toString(): string } | null;
-};
+function getEventWindow(referenceDate = new Date()): { start: Date; end: Date } {
+  const referenceTime = referenceDate.getTime();
 
-  function toEventData(event: ParsedEvent | null | undefined): ICalEventData | null {
-    if (!event || event.type !== "VEVENT") {
-      return null;
-    }
+  return {
+    start: new Date(referenceTime - LOOKBACK_DAYS * DAY_IN_MS),
+    end: new Date(referenceTime + LOOKAHEAD_DAYS * DAY_IN_MS),
+  };
+}
 
-    const repeating = event.rrule
-      ? (event.rrule.toString() as ICalEventData["repeating"])
-      : undefined;
-    const allDay =
-      event.datetype === "date" || event.start?.dateOnly === true;
+function createSanitizedEvent(name: string, instance: EventInstance, visibility: string): ICalEventData {
+  const sanitizedEvent: ICalEventData = {
+    start: instance.start,
+    end: instance.end,
+    summary: visibility === "public" ? `${name}: ${toText(instance.summary) ?? ""}` : `${name}`,
+    allDay: instance.isFullDay,
+  };
 
-    if (!event.start) {
-      return null;
-    }
-
-    return {
-      start: event.start,
-      end: event.end,
-      summary: toText(event.summary),
-      description: toText(event.description),
-      location: toText(event.location),
-      id: typeof event.uid === "string" ? event.uid : undefined,
-      recurrenceId: event.recurrenceid,
-      allDay,
-      repeating,
-    };
+  if (visibility === "public") {
+    sanitizedEvent.description = toText(instance.event.description);
+    sanitizedEvent.location = toText(instance.event.location);
   }
+
+  return sanitizedEvent;
+}
 
 /**
  * Given multiple calendar objects, it will merge them into one calendar object
  * @param calendars a list of calendar objects to merge
  */
-function merge_calendars(calendars : CalendarResponse[]) : ICalCalendar{
+function merge_calendars(calendars : ICalEventData[]) : ICalCalendar{
     const merged_cal = ical({name: "Roomate Calendar"});
-    for (const cal of calendars) {
-        for (const key of Object.keys(cal)) {
-            const event = cal[key];
-            if (!event || event.type !== "VEVENT") {
-                console.warn(`Skipping invalid event with key ${key}`);
-                continue;
-            }
 
-      const eventData = toEventData(event);
-      if (eventData) {
-        merged_cal.createEvent(eventData);
-      }
-
-      if (event.recurrences) {
-        for (const recurrence of Object.values(event.recurrences)) {
-          const recurrenceData = toEventData(recurrence);
-          if (recurrenceData) {
-            merged_cal.createEvent(recurrenceData);
-          }
-        }
-      }
-        }
+    for (const event of calendars) {
+      merged_cal.createEvent(event);
     }
 
     return merged_cal;
