@@ -49,10 +49,14 @@ export async function GET(request: NextRequest) {
     const output : string = await fetch_merge(excludeList, calendars);
 
     // return ical link with the merged calendar data
-    return new Response(output, {
-        headers: {
-            "Content-Type": "text/calendar; charset=utf-8",
-            "Content-Disposition": "inline; filename=calendar.ics",
-        },
-    });
+    if (process.env.OUTPUT === "Text") {
+        return new Response(output)
+    } else {
+        return new Response(output, {
+            headers: {
+                "Content-Type": "text/calendar; charset=utf-8",
+                "Content-Disposition": "inline; filename=calendar.ics",
+            },
+        });
+    }
 }
